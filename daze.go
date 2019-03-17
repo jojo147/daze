@@ -8,23 +8,20 @@ import (
 	"crypto/rc4"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"net"
 	"net/http"
-	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/mohanson/acdb"
+	"github.com/godump/acdb"
+	"github.com/godump/aget"
+	"github.com/godump/ddir"
 )
 
 // Link copies from src to dst and dst to src until either EOF is reached.
@@ -68,74 +65,6 @@ func Gravity(conn io.ReadWriteCloser, k []byte) io.ReadWriteCloser {
 		Writer: cipher.StreamWriter{S: cw, W: conn},
 		Closer: conn,
 	}
-}
-
-// Open a file from URL or cache with expiration.
-func OpenFile(furl string, name string, ex time.Duration) (io.ReadCloser, error) {
-	var (
-		res *http.Response
-		f   *os.File
-		fin os.FileInfo
-		raw []byte
-		err error
-	)
-	if furl == "" && name == "" {
-		return nil, errors.New("daze: furl/name does not specified")
-	}
-	if furl != "" && name == "" {
-		res, err = http.Get(furl)
-		if err != nil {
-			return nil, err
-		}
-		return res.Body, nil
-	}
-	if furl == "" && name != "" {
-		return os.Open(name)
-	}
-	fin, err = os.Stat(name)
-	if err != nil {
-		if os.IsNotExist(err) {
-			goto HERE
-		}
-		return nil, err
-	}
-	if time.Since(fin.ModTime()) > ex {
-		goto HERE
-	}
-	goto NEXT
-HERE:
-	res, err = http.Get(furl)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	raw, err = ioutil.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-	f, err = os.OpenFile(name, os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	_, err = f.Write(raw)
-	if err != nil {
-		return nil, err
-	}
-NEXT:
-	f, err = os.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
-// Kiss a file from URL or local.
-func KissFile(furl string) (io.ReadCloser, error) {
-	if strings.HasPrefix(furl, "http") {
-		return OpenFile(furl, "", time.Duration(0))
-	}
-	return OpenFile("", furl, time.Duration(0))
 }
 
 // Resolve modifies the net.DefaultResolver(which is the resolver used by the
@@ -260,8 +189,8 @@ func IPv6ReservedIPNet() *NetBox {
 // CNIPNet returns full ipv4/6 CIDR in CN.
 func CNIPNet() *NetBox {
 	furl := "http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
-	name := filepath.Join(Data(), "delegated-apnic-latest")
-	f, err := OpenFile(furl, name, time.Hour*24*64)
+	name := ddir.Join("delegated-apnic-latest")
+	f, err := aget.OpenEx(furl, name, time.Hour*24*64)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -324,7 +253,7 @@ func NewRoaderRule() *RoaderRule {
 // RULE file aims to be a minimal configuration file format that's easy to
 // read due to obvious semantics.
 // There are two parts per line on RULE file: road and glob. road are on the
-// left of the space sign and glob are on the right. road is an int and
+// left of the space sign and glob are on the right. road is an char and
 // describes whether the host should go proxy, glob supported glob-style
 // patterns:
 //   h?llo matches hello, hallo and hxllo
@@ -362,7 +291,7 @@ func (r *RoaderRule) Road(host string) int {
 
 // Load a RULE file.
 func (r *RoaderRule) Load(name string) error {
-	f, err := KissFile(name)
+	f, err := aget.Open(name)
 	if err != nil {
 		return err
 	}
@@ -785,31 +714,4 @@ func NewLocale(listen string, dialer Dialer) *Locale {
 		Listen: listen,
 		Dialer: dialer,
 	}
-}
-
-var cacheData string
-
-// Data file storage path. If you want to completely remove the daze, remember
-// to empty the data directory.
-func Data() string {
-	if cacheData != "" {
-		return cacheData
-	}
-	switch {
-	case runtime.GOOS == "windows":
-		cacheData = filepath.Join(os.Getenv("localappdata"), "daze")
-	case runtime.GOOS == "linux" && runtime.GOARCH == "arm":
-		cacheData = "./data"
-	default:
-		u, _ := user.Current()
-		cacheData = filepath.Join(u.HomeDir, ".daze")
-	}
-	_, err := os.Stat(cacheData)
-	if err == nil || os.IsExist(err) {
-		return cacheData
-	}
-	if err := os.Mkdir(cacheData, 0755); err != nil {
-		log.Fatalln(err)
-	}
-	return cacheData
 }
